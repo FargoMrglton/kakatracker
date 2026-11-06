@@ -44,6 +44,9 @@ h1{font-size:20px;font-weight:800;margin:0;letter-spacing:-.2px}
   background:linear-gradient(180deg,#B9773A,#7A4B26);box-shadow:0 8px 0 #5A3519,0 12px 24px rgba(90,53,25,.3);transition:transform .08s,box-shadow .08s;margin:4px 0 18px}
 .big:active{transform:translateY(6px);box-shadow:0 2px 0 #5A3519,0 6px 12px rgba(90,53,25,.3)}
 .big:disabled{opacity:.6}
+.big.cool{filter:grayscale(.55);opacity:.8}
+.big.shake{animation:shake .4s}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px 14px 12px;box-shadow:var(--shadow)}
 .tile .v{font-size:26px;font-weight:800;color:var(--brown);font-variant-numeric:tabular-nums}
@@ -239,6 +242,14 @@ let users = {};             // uid -> { name, login, events }
 let loaded = false, unsub = null, profileEnsured = false, pendingName = '';
 let view = 'me', sortBy = 'total', mode = 'login', authBusy = false, authErr = '', fatal = '';
 let pastOpen = false, showAll = false, armed = null, nameMsg = '';
+const COOLDOWN_MS = 15000;
+let lastTapAt = 0;
+// Сколько секунд ещё нельзя жать кнопку (считается от последнего нажатия и от последней записи — работает и между устройствами)
+function cooldownLeft(){
+  const mine = clean(myData() && myData().events), now = Date.now();
+  const recent = Math.max(lastTapAt, ...mine.filter(x => x <= now + 60000), 0);
+  return Math.max(0, Math.ceil((COOLDOWN_MS - (now - recent)) / 1000));
+}
 
 const myDoc = () => fs.doc(fs.db, 'users', me.uid);
 const myData = () => (me && users[me.uid]) || null;
@@ -465,6 +476,13 @@ function tick(){
     const st = status(s.cur), se = el('st');
     if (se && se.textContent !== st[1]) { se.className = 'status ' + st[0]; se.textContent = st[1]; }
   }
+  const go = el('go');
+  if (go) {
+    const left = cooldownLeft();
+    const label = left > 0 ? '⏳ Перерыв ' + left + ' с' : '💩 Покакал!';
+    if (go.textContent !== label) go.textContent = label;
+    go.classList.toggle('cool', left > 0);
+  }
   document.querySelectorAll('[data-since]').forEach(n => {
     const ms = now - Number(n.dataset.since);
     n.textContent = n.dataset.fmt === 'human' ? human(ms) : compact(ms);
@@ -482,8 +500,15 @@ app.addEventListener('click', e => {
   if (t.dataset.view) { view = t.dataset.view; armed = null; nameMsg = ''; render(); window.scrollTo(0, 0); return; }
   if (t.dataset.sort) { sortBy = t.dataset.sort; render(); return; }
   if (t.id === 'go') {
+    const left = cooldownLeft();
+    if (left > 0) {
+      showToast('Ты же только что это делал… 🤨 Попробуй через ' + left + ' ' + plural(left,'секунду','секунды','секунд'));
+      t.classList.remove('shake'); void t.offsetWidth; t.classList.add('shake');
+      return;
+    }
+    lastTapAt = Date.now();
     const r = t.getBoundingClientRect(); burst(r.left + r.width/2, r.top + r.height/2);
-    addPoop(Date.now()); armed = null; showToast('Записано! 💩'); return;
+    addPoop(lastTapAt); armed = null; showToast('Записано! 💩'); tick(); return;
   }
   if (t.id === 'add') {
     const v = document.getElementById('dt').value, err = document.getElementById('err');
