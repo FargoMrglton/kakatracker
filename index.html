@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Какатрекер</title>
+<title>Калометр</title>
 <meta name="theme-color" content="#7A4B26">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Какатрекер">
+<meta name="apple-mobile-web-app-title" content="Калометр">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&family=PT+Serif:wght@700&display=swap">
 <style>
@@ -336,7 +336,7 @@ function streakInfo(ev){
 
 /* ---------- not configured ---------- */
 if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey.startsWith('ВСТАВЬ')) {
-  app.innerHTML = '<div class="wrap"><div class="logo">💩</div><div class="tag">Какатрекер ещё не подключён к серверу</div></div>';
+  app.innerHTML = '<div class="wrap"><div class="logo">💩</div><div class="tag">Калометр ещё не подключён к серверу</div></div>';
   throw new Error('not configured');
 }
 
@@ -495,7 +495,7 @@ function burst(x, y){
 /* ---------- views ---------- */
 function authView(){
   const reg = mode === 'register';
-  return '<div class="wrap"><div class="logo">💩</div><div class="tag">Какатрекер — кто главный обосранец?</div>' +
+  return '<div class="wrap"><div class="logo">💩</div><div class="tag">Калометр — измеряем, кто главный обосранец</div>' +
     '<div class="card"><div class="seg"><button data-mode="login" class="' + (!reg ? 'on' : '') + '">Вход</button>' +
     '<button data-mode="register" class="' + (reg ? 'on' : '') + '">Регистрация</button></div>' +
     '<form id="authform" autocomplete="on">' +
@@ -783,7 +783,7 @@ function render(){
       (view === 'top' ? topView() : view === 'feed' ? feedView() : view === 'profile' ? profileView(profileUid || me.uid) : meView());
     const p = M.per[me.uid];
     const tab = (v, ic, l, on) => '<button data-view="' + v + '" class="' + (on ? 'on' : '') + '"><b>' + ic + '</b>' + l + '</button>';
-    app.innerHTML = '<div class="wrap"><header><h1>💩 Какатрекер</h1><div class="who">' + esc(p ? p.name : me.login) + '</div></header>' + body + '</div>' +
+    app.innerHTML = '<div class="wrap"><header><h1>💩 Калометр</h1><div class="who">' + esc(p ? p.name : me.login) + '</div></header>' + body + '</div>' +
       '<nav class="tabs">' + tab('me','💩','Я', view === 'me') + tab('feed','🧻','Газета', view === 'feed') +
       tab('top','🏆','Рейтинг', view === 'top') + tab('myprofile','👤','Профиль', view === 'profile' && profileUid === me.uid) + '</nav>';
     const d = myData(); lastPhase = d && activeSession(d) ? sessionPhase(activeSession(d)) : '';
