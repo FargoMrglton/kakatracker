@@ -1,0 +1,76 @@
+name: Пост в Telegram-канал
+
+# Новый файл в папке posts/ → пост в канал.
+# Нужны секреты репозитория: TELEGRAM_TOKEN (токен бота от @BotFather)
+# и TELEGRAM_CHAT (@имя_канала или числовой id вида -100...).
+
+on:
+  push:
+    branches: [main]
+    paths: ['posts/**']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'test — тестовое сообщение, chatid — показать id чатов, где есть бот'
+        required: true
+        default: test
+        type: choice
+        options: [test, chatid]
+
+jobs:
+  post:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Отправить новые посты
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -e
+          if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then echo "::error::Не заданы секреты TELEGRAM_TOKEN и TELEGRAM_CHAT"; exit 1; fi
+          if git cat-file -e "$BEFORE" 2>/dev/null; then RANGE="$BEFORE..$GITHUB_SHA"; else RANGE="$GITHUB_SHA~1..$GITHUB_SHA"; fi
+          FILES=$(git diff --name-only --diff-filter=A $RANGE -- 'posts/*.html' | sort)
+          if [ -z "$FILES" ]; then echo "Новых постов нет"; exit 0; fi
+          for f in $FILES; do
+            echo "Отправляю $f"
+            RESP=$(curl -sS "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${CHAT}" \
+              --data-urlencode "text@${f}" \
+              -d parse_mode=HTML)
+            echo "$RESP" | grep -q '"ok":true' || { echo "::error::Telegram ответил: $RESP"; exit 1; }
+          done
+
+  manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Тест или поиск id
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -e
+          if [ -z "$TOKEN" ]; then echo "::error::Не задан секрет TELEGRAM_TOKEN"; exit 1; fi
+          if [ "$ACTION" = "chatid" ]; then
+            curl -sS "https://api.telegram.org/bot${TOKEN}/getUpdates" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin); seen=set()
+          for u in d.get('result',[]):
+              for k in ('channel_post','message','my_chat_member'):
+                  c=(u.get(k) or {}).get('chat')
+                  if c and c['id'] not in seen:
+                      seen.add(c['id']); print(c['id'], c.get('type'), c.get('title') or c.get('username') or '')
+          print('Найдено чатов:', len(seen))"
+          else
+            RESP=$(curl -sS "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${CHAT}" \
+              --data-urlencode "text=🧪 Проверка связи: Калометр на проводе 💩")
+            echo "$RESP"
+            echo "$RESP" | grep -q '"ok":true' || { echo "::error::Не получилось отправить"; exit 1; }
+          fi
