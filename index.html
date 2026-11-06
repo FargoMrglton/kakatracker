@@ -693,7 +693,7 @@ function topView(){
     else if (sortBy === 'streak') { v = r.streak.cur; u = plural(r.streak.cur,'день','дня','дней'); }
     else { v = r.last != null ? '<span data-since="' + r.last + '">' + compact(r.cur) + '</span>' : '—'; u = 'терпит'; }
     const badges = (r.streak.cur >= 2 ? ' 🔥' + r.streak.cur : '') + (r.session ? ' 🚽' : '');
-    const sub = (r.last != null ? 'последний раз <span data-since="' + r.last + '" data-fmt="human">' + human(r.cur) + '</span> назад' : 'ещё ни разу') + ' · 🏅' + r.achCount;
+    const sub = (r.last != null ? '<span data-since="' + r.last + '" data-fmt="human">' + human(r.cur) + '</span> назад' : 'ещё ни разу') + ' · 🏅' + r.achCount;
     items += '<li data-profile="' + r.uid + '" class="' + (r.uid === me.uid ? 'me' : '') + '"><div class="rank">' + rank + '</div>' +
       '<div class="pl"><div class="nm">' + esc(r.name) + badges + (r.uid === me.uid ? '<i>это ты</i>' : '') + '</div><div class="sb">' + sub + '</div></div>' +
       '<div class="sc"><div class="v">' + v + '</div><div class="u">' + u + '</div></div></li>';

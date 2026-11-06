@@ -32,18 +32,10 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           set -e
-          if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then echo "::error::Не заданы секреты TELEGRAM_TOKEN и TELEGRAM_CHAT"; exit 1; fi
           if git cat-file -e "$BEFORE" 2>/dev/null; then RANGE="$BEFORE..$GITHUB_SHA"; else RANGE="$GITHUB_SHA~1..$GITHUB_SHA"; fi
           FILES=$(git diff --name-only --diff-filter=A $RANGE -- 'posts/*.html' | sort)
           if [ -z "$FILES" ]; then echo "Новых постов нет"; exit 0; fi
-          for f in $FILES; do
-            echo "Отправляю $f"
-            RESP=$(curl -sS "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-              --data-urlencode "chat_id=${CHAT}" \
-              --data-urlencode "text@${f}" \
-              -d parse_mode=HTML)
-            echo "$RESP" | grep -q '"ok":true' || { echo "::error::Telegram ответил: $RESP"; exit 1; }
-          done
+          python3 .github/scripts/post_telegram.py $FILES
 
   manual:
     if: github.event_name == 'workflow_dispatch'
