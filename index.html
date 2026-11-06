@@ -431,7 +431,8 @@ fa.onAuthStateChanged(fa.auth, user => {
   unsubs.forEach(f => f()); unsubs = [];
   users = {}; reactions = {}; loaded = false; profileEnsured = false; fatal = ''; armed = null; rulesOld = false;
   if (!user) { me = null; render(); return; }
-  me = { uid: user.uid, login: (user.email || '').replace(LOGIN_DOMAIN, '') };
+  const created = Date.parse((user.metadata && user.metadata.creationTime) || '');
+  me = { uid: user.uid, login: (user.email || '').replace(LOGIN_DOMAIN, ''), createdAt: isFinite(created) ? created : null };
   unsubs.push(fs.onSnapshot(fs.collection(fs.db, 'users'), snap => {
     const next = {}; snap.forEach(d => { next[d.id] = d.data(); });
     users = next; loaded = true;
@@ -488,6 +489,13 @@ function legacyEvents(){
   if (lsGet(MIGRATED_LS)) return [];
   try { const s = JSON.parse(lsGet(LEGACY_LS) || 'null'); return s ? clean(s.events) : []; } catch(e) { return []; }
 }
+// Дата регистрации: из Firebase Auth, запасной вариант — из профиля
+function regAt(){
+  const d = myData(), a = me && me.createdAt, b = d && Number(d.createdAt);
+  const vals = [a, b].filter(x => isFinite(x) && x > 0);
+  return vals.length ? Math.min(...vals) : null;
+}
+const toLocalInput = t => { const d = new Date(t); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); };
 function cooldownLeft(){
   const d = myData(), mine = clean(d && d.events), now = Date.now();
   const recent = Math.max(lastTapAt, ...mine.filter(x => x <= now + 60000), 0);
@@ -593,9 +601,10 @@ function meView(){
       '<div><b>🏅 Достижения: ' + p.achCount + ' из ' + ACH.length + '</b><div class="gap">и графики — в профиле</div></div>' +
       '<button class="btn ghost" data-profile="' + me.uid + '">Открыть</button></div>';
 
-  const nd = new Date(), nowLocal = nd.getFullYear()+'-'+pad(nd.getMonth()+1)+'-'+pad(nd.getDate())+'T'+pad(nd.getHours())+':'+pad(nd.getMinutes());
+  const nowLocal = toLocalInput(Date.now()), reg = regAt();
   html += '<details id="past"' + (pastOpen ? ' open' : '') + '><summary>🕐 Покакал раньше? Указать время</summary>' +
-    '<div class="row"><input type="datetime-local" id="dt" value="' + nowLocal + '" max="' + nowLocal + '"><button class="btn" id="add">Добавить</button></div>' +
+    '<div class="row"><input type="datetime-local" id="dt" value="' + nowLocal + '"' + (reg ? ' min="' + toLocalInput(reg) + '"' : '') + ' max="' + nowLocal + '"><button class="btn" id="add">Добавить</button></div>' +
+    (reg ? '<div class="gap" style="margin-top:6px">Можно указать время не раньше регистрации — ' + esc(whenText(reg).toLowerCase()) + '</div>' : '') +
     '<div class="err" id="err"></div></details>';
 
   if (p.n) {
@@ -894,6 +903,8 @@ app.addEventListener('click', e => {
     let ts = v ? new Date(v).getTime() : NaN;
     if (isNaN(ts)) { err.textContent = 'Выбери дату и время'; return; }
     if (ts > Date.now() + 60000) { err.textContent = 'Из будущего какать нельзя 🙂'; return; }
+    const reg = regAt();
+    if (reg && ts < Math.floor(reg / 60000) * 60000) { err.textContent = 'Тебя тут ещё не было 🙂 Ты зарегистрировался ' + whenText(reg).toLowerCase() + ' — раньше ставить нельзя.'; return; }
     const have = new Set(clean(myData() && myData().events));
     while (have.has(ts)) ts += 1;
     addPoop(ts); pastOpen = false; showToast('Добавлено задним числом 🕐'); return;
