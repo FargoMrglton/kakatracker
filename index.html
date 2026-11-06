@@ -8,7 +8,15 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Калометр">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="description" content="Калометр — измеряем, кто главный обосранец. Трекер, рейтинг, ачивки и Туалетная газета.">
+<meta property="og:title" content="Калометр 💩">
+<meta property="og:description" content="Измеряем, кто главный обосранец: секундомер на троне, засранные серии, ачивки и рейтинг друзей.">
+<meta property="og:image" content="https://fargomrglton.github.io/kakatracker/icon-512.png">
+<meta property="og:url" content="https://fargomrglton.github.io/kakatracker/">
+<meta property="og:type" content="website">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&family=PT+Serif:wght@700&display=swap">
 <style>
 :root{
@@ -106,6 +114,8 @@ ul{list-style:none;margin:0;padding:0}
 .field label{display:block;font-size:13px;color:var(--muted);margin:0 0 5px 2px}
 .hint2{font-size:12px;color:var(--muted);margin:5px 0 0 2px}
 .logo{text-align:center;font-size:64px;margin:18px 0 4px}
+.logoimg{display:block;width:200px;height:200px;margin:6px auto 4px;object-fit:contain}
+h1 img{width:30px;height:30px;vertical-align:-8px;margin-right:6px}
 .tag{text-align:center;color:var(--muted);margin:0 0 20px;font-size:15px}
 /* leaderboard */
 .sorts{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;scrollbar-width:none}
@@ -495,7 +505,7 @@ function burst(x, y){
 /* ---------- views ---------- */
 function authView(){
   const reg = mode === 'register';
-  return '<div class="wrap"><div class="logo">💩</div><div class="tag">Калометр — измеряем, кто главный обосранец</div>' +
+  return '<div class="wrap"><img class="logoimg" src="logo.png" alt="Калометр"><div class="tag">Калометр — измеряем, кто главный обосранец</div>' +
     '<div class="card"><div class="seg"><button data-mode="login" class="' + (!reg ? 'on' : '') + '">Вход</button>' +
     '<button data-mode="register" class="' + (reg ? 'on' : '') + '">Регистрация</button></div>' +
     '<form id="authform" autocomplete="on">' +
@@ -783,7 +793,7 @@ function render(){
       (view === 'top' ? topView() : view === 'feed' ? feedView() : view === 'profile' ? profileView(profileUid || me.uid) : meView());
     const p = M.per[me.uid];
     const tab = (v, ic, l, on) => '<button data-view="' + v + '" class="' + (on ? 'on' : '') + '"><b>' + ic + '</b>' + l + '</button>';
-    app.innerHTML = '<div class="wrap"><header><h1>💩 Калометр</h1><div class="who">' + esc(p ? p.name : me.login) + '</div></header>' + body + '</div>' +
+    app.innerHTML = '<div class="wrap"><header><h1><img src="favicon.png" alt="">Калометр</h1><div class="who">' + esc(p ? p.name : me.login) + '</div></header>' + body + '</div>' +
       '<nav class="tabs">' + tab('me','💩','Я', view === 'me') + tab('feed','🧻','Газета', view === 'feed') +
       tab('top','🏆','Рейтинг', view === 'top') + tab('myprofile','👤','Профиль', view === 'profile' && profileUid === me.uid) + '</nav>';
     const d = myData(); lastPhase = d && activeSession(d) ? sessionPhase(activeSession(d)) : '';
