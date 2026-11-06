@@ -284,6 +284,7 @@ function errText(e){
   if (c.includes('operation-not-allowed') || c.includes('configuration-not-found')) return 'В Firebase не включён вход по Email/паролю (Authentication → Sign-in method).';
   if (c.includes('permission-denied')) return 'Сервер не пустил. Владельцу сайта нужно обновить правила Firestore.';
   if (c.includes('invalid-api-key') || c.includes('api-key-not-valid')) return 'Неверный apiKey в настройках сайта.';
+  if (c.includes('resource-exhausted') || c.includes('quota')) return 'Сегодня нас слишком много 😅 Бесплатный лимит базы на сутки кончился — обновится около 11:00 по Москве. Записи не пропадут.';
   return 'Ошибка: ' + (c || (e && e.message) || 'неизвестно');
 }
 function lsGet(k){ try { return localStorage.getItem(k); } catch(e) { return null; } }
@@ -371,7 +372,10 @@ try {
   ]);
   const fbApp = appM.initializeApp(FIREBASE_CONFIG);
   fa = { ...authM, auth: authM.getAuth(fbApp) };
-  fs = { ...fsM, db: fsM.getFirestore(fbApp) };
+  let db;
+  try { db = fsM.initializeFirestore(fbApp, { localCache: fsM.persistentLocalCache({ tabManager: fsM.persistentMultipleTabManager() }) }); }
+  catch (e) { db = fsM.getFirestore(fbApp); }
+  fs = { ...fsM, db };
 } catch (e) {
   app.innerHTML = '<div class="wrap"><div class="logo">🚧</div><div class="center" style="padding-top:10px">Не получилось подключиться к серверу.<br>' +
     'Проверь интернет. В России может понадобиться VPN.<br><br><button class="btn" onclick="location.reload()">Попробовать ещё раз</button></div></div>';
@@ -477,7 +481,7 @@ fa.onAuthStateChanged(fa.auth, user => {
   unsubs.push(fs.onSnapshot(fs.doc(fs.db, 'private', me.uid), snap => {
     priv = snap.exists() ? snap.data() : null; privLoaded = true; render();
   }, err => { privLoaded = true; if (isPerm(err)) { rulesOld = true; render(); } }));
-  unsubs.push(fs.onSnapshot(fs.collection(fs.db, 'reactions'), snap => {
+  unsubs.push(fs.onSnapshot(fs.query(fs.collection(fs.db, 'reactions'), fs.where('at', '>=', Date.now() - 30 * DAY)), snap => {
     const next = {}; snap.forEach(d => { next[d.id] = d.data(); });
     reactions = next; render();
   }, err => { if ((err.code || '').includes('permission-denied')) { rulesOld = true; render(); } }));
