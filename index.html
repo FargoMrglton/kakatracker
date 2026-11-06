@@ -228,6 +228,7 @@ const MIGRATED_LS = 'kakatracker-migrated';
 const COOLDOWN_MS = 15000;
 const EMOJIS = ['👏', '😂', '🤢', '🔥', '💩'];
 const H = 3600000, DAY = 86400000;
+const SESSION_MAX = 60 * 60000; // дольше часа — секундомер сбрасывается, засчитываем 1 раз без времени
 
 const app = document.getElementById('app');
 
@@ -383,7 +384,7 @@ let users = {};             // uid -> { name, login, events, durations, session 
 let reactions = {};         // id -> { owner, ts, by, emoji, at }
 let loaded = false, unsubs = [], profileEnsured = false, pendingName = '', rulesOld = false;
 let view = 'me', profileUid = null, sortBy = 'total', mode = 'login', authBusy = false, authErr = '', fatal = '';
-let pastOpen = false, showAll = false, armed = null, nameMsg = '', feedLimit = 30, chartSel = {}, lastTapAt = 0, lastPhase = '';
+let pastOpen = false, showAll = false, armed = null, nameMsg = '', feedLimit = 30, chartSel = {}, lastTapAt = 0;
 let M = null; // model, rebuilt on every render
 let priv = null, privLoaded = false, nameConflict = false, claimChecked = false, pendingEmail = '', emailMsg = '';
 const EMAIL_ASK_LS = 'kalometr-email-asked';
@@ -435,7 +436,7 @@ function buildModel(){
     const cur = last != null ? Math.max(0, now - last) : 0;
     const durMap = (u.durations && typeof u.durations === 'object') ? u.durations : {};
     const durs = Object.entries(durMap).map(([k, v]) => [Number(k), Number(v)])
-      .filter(([k, v]) => evSet.has(k) && isFinite(v) && v > 0).sort((a, b) => a[0] - b[0]);
+      .filter(([k, v]) => evSet.has(k) && isFinite(v) && v > 0 && v <= SESSION_MAX / 1000).sort((a, b) => a[0] - b[0]);
     const others = Object.entries(evBy).filter(([id]) => id !== uid).flatMap(([, e]) => e).sort((a, b) => a - b);
     const given = reactList.filter(r => r.by === uid).map(r => Number(r.at) || 0).sort((a, b) => a - b);
     const got = reactList.filter(r => r.owner === uid && r.by !== uid && evSet.has(Number(r.ts))).map(r => Number(r.at) || 0).sort((a, b) => a - b);
@@ -449,7 +450,7 @@ function buildModel(){
       streak: streakInfo(ev),
       durMap: Object.fromEntries(durs), durs,
       achAt, achCount: Object.keys(achAt).length,
-      session: activeSession(u),
+      session: (() => { const st = activeSession(u); return st && now - st < SESSION_MAX ? st : null; })(),
       gotCount: got.length
     };
   });
@@ -559,6 +560,14 @@ function finishSession(start, durSec){
   return merge({ events: fs.arrayUnion(start), durations: { [String(start)]: Math.max(1, Math.round(durSec)) }, session: fs.deleteField(), login: me.login });
 }
 function cancelSession(){ return merge({ session: fs.deleteField() }); }
+let autoClosing = false;
+// Сидел дольше часа: засчитываем 1 раз, время на троне не пишем
+function autoCloseSession(start){
+  if (autoClosing) return; autoClosing = true;
+  merge({ events: fs.arrayUnion(start), session: fs.deleteField(), login: me.login })
+    .then(() => showToast('Секундомер шёл больше 60 минут — засчитали 1 раз, время на троне не учли 🚽'))
+    .finally(() => { autoClosing = false; });
+}
 function toggleReaction(owner, ts, emoji){
   const id = owner + '_' + ts + '_' + me.uid, cur = reactions[id], ref = fs.doc(fs.db, 'reactions', id);
   if (cur && cur.emoji === emoji) fs.deleteDoc(ref).catch(onWriteErr);
@@ -618,26 +627,14 @@ function authView(){
     tgPill('Новости Калометра в Telegram') + '</div>';
 }
 
-function sessionPhase(start){ const el = Date.now() - start; return el < H ? 'normal' : el < 3 * H ? 'long' : 'forgot'; }
-
 function throneCard(start){
-  const ph = sessionPhase(start);
-  let body = '';
-  if (ph === 'normal') {
-    body = '<div class="col"><button class="btn okb wide" id="sdone">✅ Готово — покакал</button>' +
-      '<button class="btn ghost wide" id="scancel">🙅 Ложная тревога</button></div>';
-  } else {
-    body = '<div class="warnbox">' + (ph === 'long'
-        ? 'Ты там уже больше часа 😳 Если забыл остановить — укажи, сколько реально сидел.'
-        : 'Секундомер идёт больше 3 часов — похоже, ты забыл его остановить. Сколько реально сидел?') + '</div>' +
-      '<div class="mins"><input id="smin" type="number" inputmode="numeric" min="1" max="180" value="10"><span style="color:var(--muted)">мин</span>' +
-      '<button class="btn okb" id="ssave" style="flex:1">Сохранить</button></div>' +
-      '<div class="col">' + (ph === 'long' ? '<button class="btn ghost wide" id="sdone">Сохранить как есть</button>' : '') +
-      '<button class="btn ghost wide" id="scancel">🙅 Не было ничего, отменить</button></div>';
-  }
+  const left = Math.max(0, SESSION_MAX - (Date.now() - start));
   return '<div class="card hero throne"><div class="label">🚽 Ты на троне</div>' +
     '<div class="clock" data-clock="' + start + '">' + clock(Date.now() - start) + '</div>' +
-    '<div class="sub">сел в ' + fmtTime.format(new Date(start)) + ' · можно закрыть сайт, время не потеряется</div>' + body + '</div>';
+    '<div class="sub">сел в ' + fmtTime.format(new Date(start)) + ' · можно закрыть сайт, время не потеряется</div>' +
+    '<div class="col"><button class="btn okb wide" id="sdone">✅ Готово — покакал</button>' +
+    '<button class="btn ghost wide" id="scancel">🙅 Ложная тревога</button></div>' +
+    '<div class="sub" style="margin-top:12px">Лимит — 60 минут. Если забудешь остановить, через <span data-left="' + (start + SESSION_MAX) + '">' + clock(left) + '</span> секундомер сбросится: засчитаем 1 раз, но без времени на троне.</div></div>';
 }
 
 function meView(){
@@ -708,7 +705,7 @@ function meView(){
 }
 
 function liveBox(){
-  const on = Object.values(M.per).filter(p => p.session && M.now - p.session < 3 * H);
+  const on = Object.values(M.per).filter(p => p.session);
   if (!on.length) return '';
   return on.map(p => '<div class="live"><span class="dot"></span><div>🚽 <b data-profile="' + p.uid + '" style="cursor:pointer">' + esc(p.name) + '</b>' +
     (p.uid === me.uid ? ' (это ты)' : '') + ' прямо сейчас на троне · <span data-clock="' + p.session + '">' + clock(M.now - p.session) + '</span></div></div>').join('');
@@ -716,7 +713,7 @@ function liveBox(){
 
 function headline(){
   const ps = Object.values(M.per), now = M.now;
-  const live = ps.filter(p => p.session && now - p.session < 3 * H).sort((a, b) => a.session - b.session)[0];
+  const live = ps.filter(p => p.session).sort((a, b) => a.session - b.session)[0];
   if (live) return 'ПРЯМОЙ ЭФИР: ' + live.name + ' прямо сейчас на троне!';
   const most = ps.slice().sort((a, b) => b.today - a.today)[0];
   if (most && most.today >= 3) return 'Сенсация! ' + most.name + ' сходил уже ' + most.today + ' ' + plural(most.today,'раз','раза','раз') + ' за день';
@@ -912,7 +909,6 @@ function render(){
     app.innerHTML = '<div class="wrap"><header><h1><img src="favicon.png" alt="">Калометр</h1><div class="hr"><div class="who">' + esc(p ? p.name : me.login) + '</div>' + tgIcon() + '</div></header>' + body + '</div>' +
       '<nav class="tabs">' + tab('me','💩','Я', view === 'me') + tab('feed','🧻','Газета', view === 'feed') +
       tab('top','🏆','Рейтинг', view === 'top') + tab('myprofile','👤','Профиль', view === 'profile' && profileUid === me.uid) + '</nav>';
-    const d = myData(); lastPhase = d && activeSession(d) ? sessionPhase(activeSession(d)) : '';
   }
   Object.keys(keep).forEach(id => { const el = document.getElementById(id); if (el && keep[id]) el.value = keep[id]; });
   Object.keys(keepChk).forEach(id => { const el = document.getElementById(id); if (el) el.checked = keepChk[id]; });
@@ -933,7 +929,7 @@ function tick(){
       if (se && se.textContent !== st[1]) { se.className = 'status ' + st[0]; se.textContent = st[1]; }
     }
     const ss = activeSession(d);
-    if (ss && sessionPhase(ss) !== lastPhase && lastPhase) { render(); return; }
+    if (ss && now - ss >= SESSION_MAX) { autoCloseSession(ss); if (el('sdone')) { render(); return; } }
   }
   const go = el('go');
   if (go) {
@@ -946,6 +942,7 @@ function tick(){
     n.textContent = n.dataset.fmt === 'human' ? human(ms) : compact(ms);
   });
   document.querySelectorAll('[data-clock]').forEach(n => { n.textContent = clock(now - Number(n.dataset.clock)); });
+  document.querySelectorAll('[data-left]').forEach(n => { n.textContent = clock(Math.max(0, Number(n.dataset.left) - now)); });
 }
 setInterval(tick, 1000);
 
@@ -979,18 +976,13 @@ app.addEventListener('click', e => {
     addPoop(lastTapAt); armed = null; showToast('Записано! 💩'); tick(); return;
   }
   if (t.id === 'sstart') { if (blocked()) return; startSession(); showToast('Секундомер пошёл 🚽 Удачи!'); return; }
-  if (t.id === 'sdone' || t.id === 'ssave') {
+  if (t.id === 'sdone') {
     const start = activeSession(myData()); if (!start) return;
-    let sec = (Date.now() - start) / 1000;
-    if (t.id === 'ssave') {
-      const m = Number(document.getElementById('smin').value);
-      if (!(m >= 1 && m <= 180)) { showToast('Укажи от 1 до 180 минут'); return; }
-      sec = m * 60;
-    }
-    sec = Math.min(sec, 3 * 3600);
+    const ms = Date.now() - start;
+    if (ms >= SESSION_MAX) { autoCloseSession(start); return; }
     lastTapAt = Date.now();
     const r = t.getBoundingClientRect(); burst(r.left + r.width/2, r.top + r.height/2);
-    finishSession(start, sec); showToast('Записано! Заседание: ' + durText(sec) + ' 💩'); return;
+    finishSession(start, ms / 1000); showToast('Записано! Заседание: ' + durText(ms / 1000) + ' 💩'); return;
   }
   if (t.id === 'scancel') { cancelSession(); showToast('Ложная тревога — ничего не записали'); return; }
   if (t.id === 'add') {
