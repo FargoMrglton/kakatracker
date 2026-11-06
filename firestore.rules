@@ -1,24 +1,52 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function nameOk(n) { return n is string && n.size() >= 2 && n.size() <= 24 && !n.matches('.*/.*'); }
+    function nameClaimed(n) { return getAfter(/databases/$(database)/documents/names/$(n)).data.uid == request.auth.uid; }
+
     match /users/{uid} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null && request.auth.uid == uid
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['name', 'login', 'events', 'createdAt', 'durations', 'session'])
-        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 24))
+        && (!('name' in request.resource.data)
+            || (resource != null && resource.data.get('name', '') == request.resource.data.name)
+            || (nameOk(request.resource.data.name) && nameClaimed(request.resource.data.name)))
         && (!('events' in request.resource.data) || (request.resource.data.events is list && request.resource.data.events.size() <= 20000))
         && (!('durations' in request.resource.data) || (request.resource.data.durations is map && request.resource.data.durations.size() <= 20000))
         && (!('session' in request.resource.data) || request.resource.data.session is map);
-      allow delete: if request.auth != null && request.auth.uid == uid;
+      allow delete: if signedIn() && request.auth.uid == uid;
     }
+
+    // Занятые имена: одно имя — один участник
+    match /names/{name} {
+      allow get: if true;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.name == name;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.name != name;
+    }
+
+    // Почта для розыгрышей: видит только сам участник (и владелец проекта в консоли Firebase)
+    match /private/{uid} {
+      allow get, delete: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'consent', 'consentAt'])
+        && request.resource.data.email is string && request.resource.data.email.size() <= 100
+        && request.resource.data.email.matches('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$')
+        && request.resource.data.consent == true;
+    }
+
     match /reactions/{id} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null
+      allow read: if signedIn();
+      allow create, update: if signedIn()
         && request.resource.data.by == request.auth.uid
         && id.matches('.*_' + request.auth.uid)
         && request.resource.data.keys().hasOnly(['owner', 'ts', 'by', 'emoji', 'at'])
         && request.resource.data.emoji in ['👏', '😂', '🤢', '🔥', '💩'];
-      allow delete: if request.auth != null && resource.data.by == request.auth.uid;
+      allow delete: if signedIn() && resource.data.by == request.auth.uid;
     }
   }
 }

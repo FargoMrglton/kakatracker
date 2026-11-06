@@ -117,6 +117,8 @@ ul{list-style:none;margin:0;padding:0}
 .seg button.on{background:var(--card);color:var(--ink);font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.08)}
 .field{margin-bottom:12px}
 .field label{display:block;font-size:13px;color:var(--muted);margin:0 0 5px 2px}
+.check{display:flex;gap:10px;align-items:flex-start;margin-top:10px;font-size:13.5px;line-height:1.35;cursor:pointer}
+.check input{flex:none;width:20px;height:20px;margin:0;accent-color:var(--brown);padding:0}
 .hint2{font-size:12px;color:var(--muted);margin:5px 0 0 2px}
 .logo{text-align:center;font-size:64px;margin:18px 0 4px}
 .logoimg{display:block;width:200px;height:200px;margin:6px auto 4px;object-fit:contain}
@@ -383,10 +385,38 @@ let loaded = false, unsubs = [], profileEnsured = false, pendingName = '', rules
 let view = 'me', profileUid = null, sortBy = 'total', mode = 'login', authBusy = false, authErr = '', fatal = '';
 let pastOpen = false, showAll = false, armed = null, nameMsg = '', feedLimit = 30, chartSel = {}, lastTapAt = 0, lastPhase = '';
 let M = null; // model, rebuilt on every render
+let priv = null, privLoaded = false, nameConflict = false, claimChecked = false, pendingEmail = '', emailMsg = '';
+const EMAIL_ASK_LS = 'kalometr-email-asked';
 
 const myDoc = () => fs.doc(fs.db, 'users', me.uid);
 const myData = () => (me && users[me.uid]) || null;
 const nameOf = u => (u && (u.name || u.login)) || 'Аноним';
+const normName = n => String(n || '').trim().replace(/\s+/g, ' ').slice(0, 24);
+const nameKey = n => normName(n).toLowerCase();
+function nameProblem(n){
+  if (n.length < 2) return 'Имя — минимум 2 символа.';
+  if (n.includes('/') || /^\.+$/.test(n) || /^__.*__$/.test(n)) return 'В имени нельзя использовать «/» и служебные сочетания.';
+  return '';
+}
+// имя занято кем-то другим среди участников (без учёта регистра)
+const nameTakenLocally = n => Object.entries(users).some(([id, u]) => id !== (me && me.uid) && nameKey(nameOf(u)) === nameKey(n));
+const isPerm = e => ((e && e.code) || '').includes('permission-denied');
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// Сохранить имя и «застолбить» его в коллекции names (одной пачкой)
+async function claimName(name, extra){
+  const newRef = fs.doc(fs.db, 'names', name);
+  const cur = await fs.getDoc(newRef);
+  if (cur.exists() && cur.data().uid !== me.uid) { const e = new Error('taken'); e.taken = true; throw e; }
+  const b = fs.writeBatch(fs.db);
+  b.set(myDoc(), { ...(extra || {}), name }, { merge: true });
+  if (!cur.exists()) b.set(newRef, { uid: me.uid });
+  const old = myData() && myData().name;
+  if (old && old !== name) {
+    const oldRef = fs.doc(fs.db, 'names', old), o = await fs.getDoc(oldRef).catch(() => null);
+    if (o && o.exists() && o.data().uid === me.uid) b.delete(oldRef);
+  }
+  await b.commit();
+}
 const onWriteErr = e => { if ((e && e.code || '').includes('permission-denied')) rulesOld = true; showToast(errText(e)); render(); };
 const activeSession = u => (u && u.session && Number(u.session.start) > 0) ? Number(u.session.start) : null;
 
@@ -430,15 +460,22 @@ function buildModel(){
 fa.onAuthStateChanged(fa.auth, user => {
   unsubs.forEach(f => f()); unsubs = [];
   users = {}; reactions = {}; loaded = false; profileEnsured = false; fatal = ''; armed = null; rulesOld = false;
+  priv = null; privLoaded = false; nameConflict = false; claimChecked = false;
   if (!user) { me = null; render(); return; }
   const created = Date.parse((user.metadata && user.metadata.creationTime) || '');
   me = { uid: user.uid, login: (user.email || '').replace(LOGIN_DOMAIN, ''), createdAt: isFinite(created) ? created : null };
   unsubs.push(fs.onSnapshot(fs.collection(fs.db, 'users'), snap => {
     const next = {}; snap.forEach(d => { next[d.id] = d.data(); });
     users = next; loaded = true;
-    if (!users[me.uid] && !profileEnsured && !snap.metadata.fromCache) ensureProfile();
+    if (!snap.metadata.fromCache) {
+      if (!users[me.uid] && !profileEnsured) ensureProfile();
+      else if (users[me.uid] && !claimChecked) checkClaim();
+    }
     render();
   }, err => { fatal = errText(err); render(); }));
+  unsubs.push(fs.onSnapshot(fs.doc(fs.db, 'private', me.uid), snap => {
+    priv = snap.exists() ? snap.data() : null; privLoaded = true; render();
+  }, err => { privLoaded = true; if (isPerm(err)) { rulesOld = true; render(); } }));
   unsubs.push(fs.onSnapshot(fs.collection(fs.db, 'reactions'), snap => {
     const next = {}; snap.forEach(d => { next[d.id] = d.data(); });
     reactions = next; render();
@@ -446,9 +483,38 @@ fa.onAuthStateChanged(fa.auth, user => {
   render();
 });
 
-function ensureProfile(){
-  profileEnsured = true;
-  fs.setDoc(myDoc(), { name: (pendingName || me.login).slice(0, 24), login: me.login, createdAt: Date.now() }, { merge: true }).catch(onWriteErr);
+async function ensureProfile(){
+  profileEnsured = true; claimChecked = true;
+  let name = normName(pendingName || me.login);
+  if (nameProblem(name) || nameTakenLocally(name)) {
+    if (pendingName) showToast('Имя «' + name + '» уже занято — пока будешь «' + me.login + '». Поменяй в профиле 👤');
+    name = me.login;
+  }
+  const prof = { login: me.login, createdAt: Date.now() };
+  try { await claimName(name, prof); }
+  catch (e) {
+    if (e.taken) { await claimName(me.login, prof).catch(() => fs.setDoc(myDoc(), { ...prof, name: me.login }, { merge: true })); showToast('Имя «' + name + '» уже занято — поменяй в профиле 👤'); }
+    else if (isPerm(e)) { rulesOld = true; await fs.setDoc(myDoc(), { ...prof, name }, { merge: true }).catch(onWriteErr); }
+    else onWriteErr(e);
+  }
+  if (pendingEmail) { savePrivate(pendingEmail); pendingEmail = ''; }
+  render();
+}
+// Для старых участников: «застолбить» текущее имя, если его ещё никто не занял
+async function checkClaim(){
+  claimChecked = true;
+  const d = myData(), name = d && d.name;
+  if (!name || nameProblem(name)) return;
+  try {
+    const cur = await fs.getDoc(fs.doc(fs.db, 'names', name));
+    if (cur.exists()) { nameConflict = cur.data().uid !== me.uid; if (nameConflict) render(); return; }
+    if (nameTakenLocally(name)) { nameConflict = true; render(); return; }
+    await claimName(name);
+  } catch (e) { if (isPerm(e)) { rulesOld = true; render(); } }
+}
+function savePrivate(email){
+  return fs.setDoc(fs.doc(fs.db, 'private', me.uid), { email, consent: true, consentAt: Date.now() })
+    .then(() => { emailMsg = 'Сохранено ✓'; render(); }).catch(onWriteErr);
 }
 
 async function doAuth(){
@@ -458,10 +524,23 @@ async function doAuth(){
   const name = nameEl ? nameEl.value.trim() : '';
   if (!/^[a-z0-9_.-]{3,20}$/.test(login)) { authErr = 'Логин: 3–20 символов, латиница, цифры, точка, _ или -'; render(); return; }
   if (pass.length < 6) { authErr = 'Пароль — минимум 6 символов.'; render(); return; }
-  if (mode === 'register' && !name) { authErr = 'Придумай имя для рейтинга.'; render(); return; }
+  const nm = normName(name);
+  let email = '';
+  if (mode === 'register') {
+    if (!nm) { authErr = 'Придумай имя для рейтинга.'; render(); return; }
+    const np = nameProblem(nm); if (np) { authErr = np; render(); return; }
+    email = (document.getElementById('email').value || '').trim().toLowerCase();
+    const consent = document.getElementById('consent').checked;
+    if (email && !EMAIL_RE.test(email)) { authErr = 'Почта выглядит неправильно. Можно оставить пустой.'; render(); return; }
+    if (email && !consent) { authErr = 'Отметь согласие на письма о розыгрышах — или оставь почту пустой.'; render(); return; }
+  }
   authBusy = true; authErr = ''; render();
   try {
-    if (mode === 'register') { pendingName = name; await fa.createUserWithEmailAndPassword(fa.auth, login + LOGIN_DOMAIN, pass); }
+    if (mode === 'register') {
+      try { const n = await fs.getDoc(fs.doc(fs.db, 'names', nm)); if (n.exists()) { authErr = 'Имя «' + nm + '» уже занято — придумай другое.'; authBusy = false; render(); return; } } catch (e) {}
+      pendingName = nm; pendingEmail = email;
+      await fa.createUserWithEmailAndPassword(fa.auth, login + LOGIN_DOMAIN, pass);
+    }
     else await fa.signInWithEmailAndPassword(fa.auth, login + LOGIN_DOMAIN, pass);
   } catch (e) { authErr = errText(e); }
   authBusy = false; render();
@@ -529,10 +608,13 @@ function authView(){
     '<form id="authform" autocomplete="on">' +
     '<div class="field"><label for="login">Логин</label><input id="login" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="например, vanya"></div>' +
     '<div class="field"><label for="pass">Пароль</label><input id="pass" type="password" name="password" autocomplete="' + (reg ? 'new-password' : 'current-password') + '" placeholder="минимум 6 символов"></div>' +
-    (reg ? '<div class="field"><label for="dname">Имя в рейтинге</label><input id="dname" maxlength="24" placeholder="как тебя видят друзья"><div class="hint2">Можно по-русски и с эмодзи. Потом можно поменять.</div></div>' : '') +
+    (reg ? '<div class="field"><label for="dname">Имя в рейтинге</label><input id="dname" maxlength="24" placeholder="как тебя видят друзья"><div class="hint2">Уникальное: двух «Петь» не будет. Можно по-русски и с эмодзи.</div></div>' +
+      '<div class="field"><label for="email">Почта — для розыгрышей (необязательно)</label><input id="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" placeholder="name@mail.ru">' +
+      '<label class="check"><input type="checkbox" id="consent"><span>Согласен получать письма о розыгрышах и ивентах Калометра</span></label>' +
+      '<div class="hint2">Почту видишь только ты и организатор. В рейтинге её нет.</div></div>' : '') +
     '<button class="btn wide" type="submit"' + (authBusy ? ' disabled' : '') + '>' + (authBusy ? 'Секунду…' : reg ? 'Создать аккаунт' : 'Войти') + '</button>' +
     '<div class="err">' + esc(authErr) + '</div></form></div>' +
-    '<div class="note">Почта не нужна — только логин и пароль.<br>Запомни пароль: восстановить его не получится.</div>' +
+    '<div class="note">Для входа нужны только логин и пароль.<br>Запомни пароль: восстановить его не получится.</div>' +
     tgPill('Новости Калометра в Telegram') + '</div>';
 }
 
@@ -565,6 +647,9 @@ function meView(){
   if (legacy.length) html += '<div class="banner">📦 На этом устройстве есть ' + legacy.length + ' ' + plural(legacy.length,'запись','записи','записей') +
     ' из старой версии трекера. Перенести в аккаунт?<div class="row"><button class="btn" id="migrate">Перенести</button><button class="btn ghost" id="nomigrate">Не надо</button></div></div>';
 
+  if (nameConflict) html += '<div class="banner bad">⚠️ Твоё имя уже занято другим участником — поменяй его в профиле, чтобы вас не путали.<div class="row"><button class="btn" data-view="myprofile">Поменять имя</button></div></div>';
+  else if (privLoaded && !priv && !rulesOld && !lsGet(EMAIL_ASK_LS)) html += '<div class="banner">🎁 Скоро розыгрыши за участие в ивентах! Укажи почту, чтобы не пропустить.' +
+    '<div class="row"><button class="btn" id="askemail">Указать почту</button><button class="btn ghost" id="noemail">Не сейчас</button></div></div>';
   if (p.session) {
     html += throneCard(p.session);
   } else {
@@ -789,9 +874,17 @@ function profileView(uid){
       (i, v) => { const t = M.now - (29 - i) * DAY; return (i === 29 ? 'Сегодня' : fmtDay.format(new Date(t))) + ' — ' + times(v); });
 
   if (mine) {
-    html += '<div class="card"><h2>Имя в рейтинге</h2>' +
+    html += (nameConflict ? '<div class="banner bad">⚠️ Такое имя уже есть у другого участника — придумай своё, чтобы вас не путали.</div>' : '') +
+      '<div class="card"><h2>Имя в рейтинге</h2>' +
       '<div class="row" style="margin-top:0"><input id="newname" maxlength="24" value="' + esc(p.name) + '"><button class="btn" id="savename">Сохранить</button></div>' +
       '<div class="err" style="color:var(--ok)">' + esc(nameMsg) + '</div></div>' +
+      '<div class="card" id="emailcard"><h2>📧 Почта для розыгрышей</h2>' +
+        (priv && priv.email ? '<div style="font-size:14px;margin-bottom:8px">Сейчас: <b>' + esc(priv.email) + '</b></div>' : '<div class="gap" style="margin:-4px 0 8px">Будем писать только о розыгрышах и ивентах. Без спама.</div>') +
+        '<input id="pemail" type="email" inputmode="email" autocomplete="email" autocapitalize="none" placeholder="name@mail.ru" value="' + esc(priv && priv.email || '') + '">' +
+        '<label class="check"><input type="checkbox" id="pconsent"' + (priv && priv.consent ? ' checked' : '') + '><span>Согласен получать письма о розыгрышах и ивентах Калометра</span></label>' +
+        '<div class="row"><button class="btn" id="saveemail" style="flex:1">Сохранить</button>' + (priv ? '<button class="btn ghost" id="delemail">Удалить</button>' : '') + '</div>' +
+        '<div class="err" style="color:var(--ok)">' + esc(emailMsg) + '</div>' +
+        '<div class="gap">Почту видишь только ты и организатор, в рейтинге её нет.</div></div>' +
       '<div class="card"><h2>Аккаунт</h2><div style="font-size:14px;color:var(--muted);margin-bottom:12px">Логин: <b style="color:var(--ink)">' + esc(me.login) + '</b></div>' +
       '<button class="btn ghost wide" id="logout">Выйти</button></div>' +
       tgPill('Обновления — в нашем Telegram') +
@@ -802,7 +895,8 @@ function profileView(uid){
 
 function render(){
   const keep = {};
-  app.querySelectorAll('input[id]').forEach(i => { keep[i.id] = i.value; });
+  const keepChk = {};
+  app.querySelectorAll('input[id]').forEach(i => { if (i.type === 'checkbox') keepChk[i.id] = i.checked; else keep[i.id] = i.value; });
   const focusId = document.activeElement && document.activeElement.id;
 
   if (!me) { app.innerHTML = authView(); }
@@ -821,6 +915,7 @@ function render(){
     const d = myData(); lastPhase = d && activeSession(d) ? sessionPhase(activeSession(d)) : '';
   }
   Object.keys(keep).forEach(id => { const el = document.getElementById(id); if (el && keep[id]) el.value = keep[id]; });
+  Object.keys(keepChk).forEach(id => { const el = document.getElementById(id); if (el) el.checked = keepChk[id]; });
   if (focusId) { const f = document.getElementById(focusId); if (f && f.focus) f.focus(); }
   tick();
 }
@@ -864,7 +959,7 @@ app.addEventListener('click', e => {
   if (t.dataset.view) {
     if (t.dataset.view === 'myprofile') { view = 'profile'; profileUid = me.uid; }
     else view = t.dataset.view;
-    armed = null; nameMsg = ''; render(); window.scrollTo(0, 0); return;
+    armed = null; nameMsg = ''; emailMsg = ''; render(); window.scrollTo(0, 0); return;
   }
   if (t.dataset.profile) { view = 'profile'; profileUid = t.dataset.profile; nameMsg = ''; render(); window.scrollTo(0, 0); return; }
   if (t.dataset.sort) { sortBy = t.dataset.sort; render(); return; }
@@ -924,11 +1019,27 @@ app.addEventListener('click', e => {
   }
   if (t.id === 'nomigrate') { lsSet(MIGRATED_LS, '1'); render(); return; }
   if (t.id === 'savename') {
-    const nm = (document.getElementById('newname').value || '').trim().slice(0, 24);
-    if (!nm) return;
-    fs.setDoc(myDoc(), { name: nm }, { merge: true }).then(() => { nameMsg = 'Сохранено ✓'; render(); }).catch(onWriteErr);
+    const nm = normName(document.getElementById('newname').value);
+    const np = nameProblem(nm); if (np) { showToast(np); return; }
+    if (nm === (myData() && myData().name) && !nameConflict) return;
+    if (nameTakenLocally(nm)) { showToast('Имя «' + nm + '» уже занято 😏 Придумай другое'); return; }
+    claimName(nm).then(() => { nameMsg = 'Сохранено ✓'; nameConflict = false; render(); })
+      .catch(e => { if (e.taken) showToast('Имя «' + nm + '» уже занято 😏 Придумай другое');
+        else if (isPerm(e)) { rulesOld = true; fs.setDoc(myDoc(), { name: nm }, { merge: true }).then(() => { nameMsg = 'Сохранено ✓'; render(); }).catch(onWriteErr); }
+        else onWriteErr(e); });
     return;
   }
+  if (t.id === 'saveemail') {
+    const em = (document.getElementById('pemail').value || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(em)) { showToast('Почта выглядит неправильно'); return; }
+    if (!document.getElementById('pconsent').checked) { showToast('Отметь согласие на письма о розыгрышах'); return; }
+    savePrivate(em); lsSet(EMAIL_ASK_LS, '1'); return;
+  }
+  if (t.id === 'delemail') { fs.deleteDoc(fs.doc(fs.db, 'private', me.uid)).then(() => {
+      const i = document.getElementById('pemail'), c = document.getElementById('pconsent'); if (i) i.value = ''; if (c) c.checked = false;
+      emailMsg = 'Почта удалена'; render(); }).catch(onWriteErr); return; }
+  if (t.id === 'askemail') { lsSet(EMAIL_ASK_LS, '1'); view = 'profile'; profileUid = me.uid; render(); const c = document.getElementById('emailcard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+  if (t.id === 'noemail') { lsSet(EMAIL_ASK_LS, '1'); render(); return; }
   if (t.id === 'logout') { view = 'me'; mode = 'login'; authErr = ''; fa.signOut(fa.auth); return; }
 });
 
