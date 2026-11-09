@@ -228,6 +228,8 @@ const MIGRATED_LS = 'kakatracker-migrated';
 const COOLDOWN_MS = 15000;
 const EMOJIS = ['👏', '😂', '🤢', '🔥', '💩'];
 const H = 3600000, DAY = 86400000;
+const INACTIVE_MS = 72 * H; // кто не какал дольше — выпадает из рейтинга
+const WORRY_FROM = 36 * H, WORRY_FOR = 2 * H; // новость о большом перерыве висит 2 часа
 const SESSION_MAX = 60 * 60000; // дольше часа — секундомер сбрасывается, засчитываем 1 раз без времени
 
 const app = document.getElementById('app');
@@ -723,7 +725,7 @@ function headline(){
   if (most && most.today >= 3) return 'Сенсация! ' + most.name + ' сходил уже ' + most.today + ' ' + plural(most.today,'раз','раза','раз') + ' за день';
   const longSess = ps.flatMap(p => p.durs.filter(([t]) => dayNum(t) === dayNum(now)).map(([t, s]) => ({ p, s }))).sort((a, b) => b.s - a.s)[0];
   if (longSess && longSess.s >= 600) return 'Рекорд заседания: ' + longSess.p.name + ' провёл на троне ' + durText(longSess.s);
-  const worried = ps.filter(p => p.last != null).sort((a, b) => b.cur - a.cur)[0];
+  const worried = ps.filter(p => p.last != null && p.cur >= WORRY_FROM && p.cur < WORRY_FROM + WORRY_FOR).sort((a, b) => b.cur - a.cur)[0];
   if (worried && worried.cur >= 36 * H) return 'Редакция обеспокоена: ' + worried.name + ' не какает уже ' + human(worried.cur);
   const streaky = ps.slice().sort((a, b) => b.streak.cur - a.streak.cur)[0];
   if (streaky && streaky.streak.cur >= 3) return streaky.name + ' держит засранную серию ' + streaky.streak.cur + ' ' + plural(streaky.streak.cur,'день','дня','дней') + ' подряд 🔥';
@@ -774,8 +776,11 @@ function feedView(){
 }
 
 function topView(){
-  const rows = Object.values(M.per);
-  if (!rows.length) return '<div class="center">Пока никого нет 🤷</div>';
+  const active = p => p.last != null && p.cur < INACTIVE_MS;
+  const rows = Object.values(M.per).filter(active);
+  const meP = M.per[me.uid], outMe = meP && !active(meP)
+    ? '<div class="banner">😴 Тебя сейчас нет в рейтинге: ' + (meP.last == null ? 'ты ещё ни разу не покакал' : 'ты не какал больше 72 часов') + '. Сходи — и сразу вернёшься 💩</div>' : '';
+  if (!rows.length) return outMe + '<div class="center">В рейтинге пока пусто 🤷<br>Сюда попадают те, кто какал за последние 72 часа</div>';
   const cmp = {
     total:  (a,b) => b.n - a.n || (b.last||0) - (a.last||0),
     week:   (a,b) => b.week - a.week || b.n - a.n,
@@ -811,7 +816,7 @@ function topView(){
     (has ? '<div class="card king"><div class="crown">' + ({ hold:'🧘', streak:'🔥' }[sortBy] || '👑') + '</div><div class="t">' + titles[sortBy] + '</div>' +
       '<div class="n">' + esc(lead.name) + '</div><div class="s">' + kingSub + '</div></div>' : '') +
     '<div class="card" style="padding:8px"><ul class="board">' + items + '</ul></div>' +
-    '<div class="note">' + rows.length + ' ' + plural(rows.length,'участник','участника','участников') + ' · нажми на человека, чтобы открыть профиль</div>';
+    outMe + '<div class="note">' + rows.length + ' ' + plural(rows.length,'участник','участника','участников') + ' · нажми на человека, чтобы открыть профиль<br>Кто не какал больше 72 часов, в рейтинг не попадает</div>';
 }
 
 function barChart(id, title, vals, ticks, describe){
